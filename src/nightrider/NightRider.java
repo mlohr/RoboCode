@@ -13,15 +13,89 @@ import robocode.util.Utils;
 
 public class NightRider extends AdvancedRobot {
 
-	SortedMap<Double, ScannedRobotEvent> opponents = new TreeMap<Double, ScannedRobotEvent>();
-	private ScannedRobotEvent nearestOpponent = null;
-	private boolean fullScan = false;
-	private boolean startFullScan = false;
 	private boolean offensive = true;
 
 	private int direction = 1;
 	private int shots = 0;
 	private int scanInterval;
+	private double lastVelocity;
+	private long lastTurtling;
+	private Radar radar;
+
+	public class Radar {
+		SortedMap<Double, ScannedRobotEvent> opponents = new TreeMap<Double, ScannedRobotEvent>();
+		private ScannedRobotEvent lockedOpponent = null;
+		private boolean fullScan = false;
+		private boolean startFullScan = true;
+
+		public void scanLock() {
+			if (getTime() % scanInterval == 0) {
+				startFullScan();
+			}
+			if (lockedOpponent != null && (getTime() - lockedOpponent.getTime()) > 1) {
+				startFullScan();
+			}
+
+			if (startFullScan) {
+				setTurnRadarLeft(360.0);
+				opponents.clear();
+				lockedOpponent = null;
+				fullScan = true;
+				startFullScan = false;
+			}
+			if (fullScan && getRadarTurnRemaining() == 0) {
+				fullScan = false;
+				if (opponents.isEmpty()) {
+					startFullScan();
+					lockedOpponent = null;
+				} else {
+					lockedOpponent = opponents.get(opponents.firstKey());
+				}
+			}
+			if (isLocked()) {
+				setTurnRadarRightRadians(
+						Utils.normalRelativeAngle(getOpponentBearing() - getRadarHeadingRadians()) * 2.0);
+			}
+		}
+
+		public void startFullScan() {
+			startFullScan = true;
+		}
+
+		public double getOpponentLateralVelocity() {
+			return lockedOpponent.getVelocity() * Math.sin(lockedOpponent.getHeadingRadians() - getOpponentBearing());
+		}
+
+		public double getOpponentBearing() {
+			return lockedOpponent.getBearingRadians() + getHeadingRadians();
+		}
+
+		public boolean isLocked() {
+			return !fullScan && lockedOpponent != null;
+		}
+
+		public double getLockedDistance() {
+			return lockedOpponent.getDistance();
+		}
+
+		public double getLockedEnergy() {
+			return lockedOpponent.getEnergy();
+		}
+
+		public void processEvent(ScannedRobotEvent e) {
+			if (fullScan) {
+				opponents.put(e.getDistance(), e);
+			} else {
+				if (e.getName() == lockedOpponent.getName()) {
+					lockedOpponent = e;
+				}
+			}
+		}
+
+		public boolean identifyLock(String name) {
+			return lockedOpponent.getName() == name;
+		}
+	}
 
 	public void run() {
 		setAdjustGunForRobotTurn(true);
@@ -33,86 +107,67 @@ public class NightRider extends AdvancedRobot {
 		setBulletColor(Color.red);
 		setScanColor(Color.red);
 
-		double absBearing = 0.0;
-		double radarTurn = 0.0;
-		double latVel = 0.0;
+		radar = new Radar();
 		double bulletPower = 1.0;
 
 		scanInterval = 60;
 		setAhead(10000);
-		startFullScan = true;
 
 		while (true) {
-			if (getTime() % scanInterval == 0) {
-				startFullScan = true;
-			}
-			if (nearestOpponent != null && (getTime() - nearestOpponent.getTime()) > 1) {
-				startFullScan = true;
+			radar.scanLock();
+
+			if (radar.isLocked()) {
+				setTurnGunRightRadians(Utils.normalRelativeAngle(radar.getOpponentBearing() - getGunHeadingRadians()));
 			}
 
-			if (startFullScan) {
-				setTurnRadarLeft(360.0);
-				opponents.clear();
-				nearestOpponent = null;
-				fullScan = true;
-				startFullScan = false;
-			}
-			if (fullScan && getRadarTurnRemaining() == 0) {
-				fullScan = false;
-				if (opponents.isEmpty()) {
-					startFullScan = true;
-					nearestOpponent = null;
-				} else {
-					nearestOpponent = opponents.get(opponents.firstKey());
-				}
-			}
-
-			if (!fullScan && nearestOpponent != null) {
-				absBearing = nearestOpponent.getBearingRadians() + getHeadingRadians();
-				latVel = nearestOpponent.getVelocity() * Math.sin(nearestOpponent.getHeadingRadians() - absBearing);
-				radarTurn = absBearing - getRadarHeadingRadians();
-				setTurnRadarRightRadians(Utils.normalRelativeAngle(radarTurn) * 2.0);
-				setTurnGunRightRadians(Utils.normalRelativeAngle(absBearing - getGunHeadingRadians()));
-			}
-
-			if (getGunHeat() == 0 && nearestOpponent != null) {
-				if (nearestOpponent.getDistance() < 100.0) {
+			if (radar.isLocked()) {
+				if (radar.getLockedDistance() < 100.0) {
 					scanInterval = 60;
 					bulletPower = 5.0;
-					setTurnRightRadians(0.5 * Math.PI);
-//					 setTurnRightRadians(Utils.normalRelativeAngle(0.5*Math.PI
-//					 - getHeadingRadians()));
-					setAhead(direction * 100);
-//					setMaxVelocity(4.0);
+					setTurnRightRadians(0.5 * Math.PI + Math.sin(getDistanceRemaining()));
+					// setTurnRightRadians(Utils.normalRelativeAngle(0.5*Math.PI
+					// - getHeadingRadians()));
+					setAhead(direction * 80);
+					// setMaxVelocity(4.0);
 				} else {
 					scanInterval = 40;
-//					setMaxVelocity(8.0);
-					setAhead(direction * nearestOpponent.getDistance() / 2);
-					bulletPower = (getBattleFieldWidth() - nearestOpponent.getDistance()) / getBattleFieldWidth() * 5.0;
-					double angle = Utils.normalRelativeAngle(
-							absBearing - getGunHeadingRadians() + Math.asin(latVel / (20 - 3 * bulletPower)));
+					// setMaxVelocity(8.0);
+					setAhead(direction * radar.getLockedDistance() / 2);
+					bulletPower = (getBattleFieldWidth() - radar.getLockedDistance()) / getBattleFieldWidth() * 3.0;
+					double angle = Utils.normalRelativeAngle(radar.getOpponentBearing() - getGunHeadingRadians()
+							+ Math.asin(radar.getOpponentLateralVelocity() / (20 - 3 * bulletPower)));
 					setTurnGunRightRadians(angle);
 
 					if (offensive) {
-						setTurnRightRadians(
-								Math.random() * Utils.normalRelativeAngle(absBearing - getHeadingRadians()));
+						setTurnRightRadians(Math.sin(getDistanceRemaining()) + Math.random()
+								* Utils.normalRelativeAngle(radar.getOpponentBearing() - getHeadingRadians()));
 					} else {
-						setTurnGunRightRadians(angle);
+						setTurnRightRadians(angle);
 					}
 				}
-				if (Math.abs(getGunTurnRemaining()) < 10.0) {
+				if (getGunHeat() == 0 && Math.abs(getGunTurnRemaining()) < 10.0) {
 					setFire(bulletPower);
 					shots++;
 					if (!offensive && shots % 5 == 0) {
 						direction = -direction;
 					}
 				}
-				
-				if (offensive && getOthers() == 1 && getEnergy() < nearestOpponent.getEnergy() ) {
+
+				if (offensive && getOthers() == 1 && getEnergy() < radar.getLockedEnergy()) {
 					System.out.println("Defensive!");
 					offensive = false;
 				}
-				// take care off if vel is 0 for several turns then change direction
+
+				// take care off if velocity is 0 for several turns then change
+				// direction
+				if (getVelocity() == 0.0 && lastVelocity == 0.0) {
+					if (lastTurtling == getTime() - 1) {
+						direction = -direction;
+					}
+					setAhead(direction * 80);
+					lastTurtling = getTime();
+				}
+				lastVelocity = getVelocity();
 			}
 			execute();
 		}
@@ -120,36 +175,34 @@ public class NightRider extends AdvancedRobot {
 
 	@Override
 	public void onScannedRobot(ScannedRobotEvent e) {
-		if (fullScan) {
-			opponents.put(e.getDistance(), e);
-		} else {
-			if (e.getName() == nearestOpponent.getName()) {
-				nearestOpponent = e;
-			}
-		}
+		radar.processEvent(e);
 	}
 
 	@Override
 	public void onBulletHit(BulletHitEvent e) {
-		if (nearestOpponent != null && e.getName() == nearestOpponent.getName()) {
+		if (radar.isLocked() && radar.identifyLock(e.getName())) {
 			if (e.getEnergy() == 0.0) {
-				startFullScan = true;
+				radar.startFullScan();
 			}
 		}
 	}
 
 	@Override
 	public void onHitWall(HitWallEvent event) {
-		setBack(direction * 80);
-		setTurnLeft(event.getBearing());
-		// change direction? & reuse remaining distance & turning?
+		driveInReverse(event.getBearing());
 	}
 
 	@Override
 	public void onHitRobot(HitRobotEvent event) {
-		setBack(direction * 80);
-		setTurnLeft(event.getBearing());
-		// change direction? & reuse remaining distance & turning?
+		driveInReverse(event.getBearing());
+		if (radar.getLockedDistance() > 50) {
+			radar.startFullScan();
+		}
 	}
 
+	private void driveInReverse(double bearing) {
+		direction = -direction;
+		setAhead(direction * 80);
+		setTurnLeft(bearing);
+	}
 }

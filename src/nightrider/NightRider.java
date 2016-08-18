@@ -16,17 +16,17 @@ public class NightRider extends AdvancedRobot {
 	private boolean offensive = true;
 
 	private int direction = 1;
-	private int shots = 0;
 	private int scanInterval;
 	private double lastVelocity;
 	private long lastTurtling;
 	private Radar radar;
 
+	private Gun gun;
+
 	public class Radar {
 		SortedMap<Double, ScannedRobotEvent> opponents = new TreeMap<Double, ScannedRobotEvent>();
 		private ScannedRobotEvent lockedOpponent = null;
 		private boolean fullScan = false;
-		private boolean startFullScan = true;
 
 		public void scanLock() {
 			if (getTime() % scanInterval == 0) {
@@ -34,14 +34,6 @@ public class NightRider extends AdvancedRobot {
 			}
 			if (lockedOpponent != null && (getTime() - lockedOpponent.getTime()) > 1) {
 				startFullScan();
-			}
-
-			if (startFullScan) {
-				setTurnRadarLeft(360.0);
-				opponents.clear();
-				lockedOpponent = null;
-				fullScan = true;
-				startFullScan = false;
 			}
 			if (fullScan && getRadarTurnRemaining() == 0) {
 				fullScan = false;
@@ -59,7 +51,10 @@ public class NightRider extends AdvancedRobot {
 		}
 
 		public void startFullScan() {
-			startFullScan = true;
+			setTurnRadarLeft(360.0);
+			opponents.clear();
+			lockedOpponent = null;
+			fullScan = true;
 		}
 
 		public double getOpponentLateralVelocity() {
@@ -75,7 +70,10 @@ public class NightRider extends AdvancedRobot {
 		}
 
 		public double getLockedDistance() {
-			return lockedOpponent.getDistance();
+			if (lockedOpponent != null) 
+				return lockedOpponent.getDistance();
+			else 
+				return getBattleFieldHeight();
 		}
 
 		public double getLockedEnergy() {
@@ -93,7 +91,47 @@ public class NightRider extends AdvancedRobot {
 		}
 
 		public boolean identifyLock(String name) {
-			return lockedOpponent.getName() == name;
+			if (lockedOpponent != null) 
+				return lockedOpponent.getName() == name;
+			else 
+				return false;
+		}
+	}
+
+	public class Gun {
+
+		private double gunHeading = getGunHeadingRadians();
+		private double bulletPower = 1.0;
+		private int shots = 0;
+
+		public void aimOnLock() {
+			if (radar.isLocked()) {
+				gunHeading = Utils.normalRelativeAngle(radar.getOpponentBearing() - getGunHeadingRadians());
+				setTurnGunRightRadians(gunHeading);
+			}
+		}
+
+		public void aimPredictive() {
+			gunHeading = Utils.normalRelativeAngle(radar.getOpponentBearing() - getGunHeadingRadians()
+					+ Math.asin(radar.getOpponentLateralVelocity() / (20 - 3 * bulletPower)));
+			setTurnGunRightRadians(gunHeading);
+		}
+
+		public double getHeading() {
+			return gunHeading;
+		}
+
+		public void setPower(double power) {
+			bulletPower = power;
+		}
+
+		public void fire() {
+			setFire(bulletPower);
+			shots++;
+		}
+
+		public int shotCount() {
+			return shots;
 		}
 	}
 
@@ -101,55 +139,45 @@ public class NightRider extends AdvancedRobot {
 		setAdjustGunForRobotTurn(true);
 		setAdjustRadarForGunTurn(true);
 		setAdjustRadarForRobotTurn(true);
-		setBodyColor(Color.black);
-		setGunColor(Color.black);
-		setRadarColor(Color.black);
-		setBulletColor(Color.red);
-		setScanColor(Color.red);
+		skinBot();
 
 		radar = new Radar();
-		double bulletPower = 1.0;
+		gun = new Gun();
 
 		scanInterval = 60;
 		setAhead(10000);
 
 		while (true) {
 			radar.scanLock();
-
-			if (radar.isLocked()) {
-				setTurnGunRightRadians(Utils.normalRelativeAngle(radar.getOpponentBearing() - getGunHeadingRadians()));
-			}
-
+			gun.aimOnLock();
 			if (radar.isLocked()) {
 				if (radar.getLockedDistance() < 100.0) {
 					scanInterval = 60;
-					bulletPower = 5.0;
-					setTurnRightRadians(0.5 * Math.PI + Math.sin(getDistanceRemaining()));
+					gun.setPower(5.0);
+					setTurnRightRadians(0.5 * Math.PI + Math.sin(radar.getLockedDistance()));
 					// setTurnRightRadians(Utils.normalRelativeAngle(0.5*Math.PI
 					// - getHeadingRadians()));
 					setAhead(direction * 80);
-					// setMaxVelocity(4.0);
 				} else {
 					scanInterval = 40;
-					// setMaxVelocity(8.0);
 					setAhead(direction * radar.getLockedDistance() / 2);
-					bulletPower = (getBattleFieldWidth() - radar.getLockedDistance()) / getBattleFieldWidth() * 3.0;
-					double angle = Utils.normalRelativeAngle(radar.getOpponentBearing() - getGunHeadingRadians()
-							+ Math.asin(radar.getOpponentLateralVelocity() / (20 - 3 * bulletPower)));
-					setTurnGunRightRadians(angle);
+					gun.setPower((getBattleFieldWidth() - radar.getLockedDistance()) / getBattleFieldWidth() * 3.0);
+					gun.aimPredictive();
 
 					if (offensive) {
-						setTurnRightRadians(Math.sin(getDistanceRemaining()) + Math.random()
-								* Utils.normalRelativeAngle(radar.getOpponentBearing() - getHeadingRadians()));
+						double strafeFactor = 1.6*Math.sin(radar.getLockedDistance()/25);
+						System.out.println(""+strafeFactor);
+						setTurnRightRadians(Math.random()
+								* Utils.normalRelativeAngle(strafeFactor +radar.getOpponentBearing() - getHeadingRadians()));
 					} else {
-						setTurnRightRadians(angle);
+						// FIX
+						setTurnRightRadians(gun.getHeading());
 					}
 				}
 				if (getGunHeat() == 0 && Math.abs(getGunTurnRemaining()) < 10.0) {
-					setFire(bulletPower);
-					shots++;
-					if (!offensive && shots % 5 == 0) {
-						direction = -direction;
+					gun.fire();
+					if (!offensive && gun.shotCount() % 5 == 0) {
+						reverseDirection();
 					}
 				}
 
@@ -162,7 +190,7 @@ public class NightRider extends AdvancedRobot {
 				// direction
 				if (getVelocity() == 0.0 && lastVelocity == 0.0) {
 					if (lastTurtling == getTime() - 1) {
-						direction = -direction;
+						reverseDirection();
 					}
 					setAhead(direction * 80);
 					lastTurtling = getTime();
@@ -173,6 +201,18 @@ public class NightRider extends AdvancedRobot {
 		}
 	}
 
+	private void skinBot() {
+		setBodyColor(Color.black);
+		setGunColor(Color.black);
+		setRadarColor(Color.black);
+		setBulletColor(Color.red);
+		setScanColor(Color.red);
+	}
+
+	private void reverseDirection() {
+		direction = -direction;
+	}
+
 	@Override
 	public void onScannedRobot(ScannedRobotEvent e) {
 		radar.processEvent(e);
@@ -180,10 +220,8 @@ public class NightRider extends AdvancedRobot {
 
 	@Override
 	public void onBulletHit(BulletHitEvent e) {
-		if (radar.isLocked() && radar.identifyLock(e.getName())) {
-			if (e.getEnergy() == 0.0) {
-				radar.startFullScan();
-			}
+		if (e.getEnergy() == 0.0 && radar.identifyLock(e.getName())) {
+			radar.startFullScan();
 		}
 	}
 
@@ -200,9 +238,9 @@ public class NightRider extends AdvancedRobot {
 		}
 	}
 
-	private void driveInReverse(double bearing) {
-		direction = -direction;
+	private void driveInReverse(double heading) {
+		reverseDirection();
 		setAhead(direction * 80);
-		setTurnLeft(bearing);
+		setTurnLeft(heading);
 	}
 }
